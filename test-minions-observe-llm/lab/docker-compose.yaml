@@ -1,0 +1,93 @@
+services:
+  vllm-proxy-app:
+    build: ../proxyApp
+    container_name: vllm-proxy-app
+    ports:
+      - "8000:8000"
+      - "9100:9100"
+    depends_on:
+      - vllm-v1
+      - vllm-v2
+      - otel-collector
+    environment:
+      SERVICE_NAME: vllm-proxy-app
+      VLLM_ENDPOINTS: >
+        v1=http://vllm1:8001/generate,
+        v2=http://vllm2:8002/generate
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_TRACES_EXPORTER: otlp
+
+  vllm-v1:
+    image: vllm/vllm-openai:latest
+    runtime: nvidia
+    container_name: vllm-v1
+    ports:
+      - "8001:8000"
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface  
+    command: --model facebook/opt-1.3b
+
+  vllm-v2:
+    image: vllm/vllm-openai:latest
+    runtime: nvidia
+    container_name: vllm-v2
+    ports:
+      - "8002:8000"
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface  
+    command: --model facebook/opt-1.3b
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ../config/otel/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317"
+      - "8888:8888"
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.117.1
+    container_name: victoriametrics
+    ports:
+      - "8428:8428"
+
+  vmalert:
+    image: victoriametrics/vmalert:v1.117.1
+    container_name: vmalert
+    command:
+      - -datasource.url=http://victoriametrics:8428
+      - -remoteRead.url=http://victoriametrics:8428
+      - -remoteWrite.url=http://victoriametrics:8428
+      - -rule=/etc/vmalert/*.yaml
+      - -notifier.url=http://alertmanager:9093
+    volumes:
+      - ../config/vmalert:/etc/vmalert
+    depends_on:
+      - victoriametrics
+      - alertmanager
+    ports:
+      - "8880:8880"
+
+  alertmanager:
+    image: prom/alertmanager
+    container_name: alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ../config/alertmanager:/etc/alertmanager
+
+  grafana:
+    image: grafana/grafana:latest
+    user: "472:472"
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - victoriametrics
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=minions123
+    volumes:
+      - ../config/grafana:/var/lib/grafana
